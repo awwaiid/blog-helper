@@ -2,18 +2,18 @@
 
 const { execSync, spawn } = require('child_process');
 
-function exec(cmd) {
-  return execSync(cmd).toString().trim();
+function exec(cmd: string) {
+  return execSync(cmd, { maxBuffer: 1024 * 1024 * 10 }).toString().trim();
 }
 
-function run(command, args) {
+function run(command: string, args: string[]) {
   const child = spawn(command, args, { stdio: 'inherit' });
 
-  child.on('error', (error) => {
+  child.on('error', (error: { message: string }) => {
     console.error(`Error: ${error.message}`);
   });
 
-  child.on('exit', (code) => {
+  child.on('exit', (code: number) => {
     console.log(`Process exited with code ${code}`);
   });
 }
@@ -26,7 +26,7 @@ program
   .description("Manage blog posts")
   .version("1.0.0");
 
-function findFile(title) {
+function findFile(title: string) {
   const existingFile = exec(`
     cd ~/tlt/thelackthereof/content
     ls *.md | rg '${title}' || true
@@ -42,8 +42,8 @@ program.command('new')
   .alias('edit')
   .description('Create or edit a blog post')
   .argument('<title...>', 'blog post title')
-  .action((title) => {
-    title = title.join(' ');
+  .action((titleList: string[]) => {
+    const title = titleList.join(' ');
 
     // Run the external command and store the output in a variable
     const existingFile = findFile(title);
@@ -77,7 +77,7 @@ program.command('drafts')
   });
 
 program.command('list')
-  .description('List draft posts')
+  .description('List posts')
   .action(() => {
     console.log(exec(`
       cd ~/tlt/thelackthereof/content
@@ -86,9 +86,10 @@ program.command('list')
   });
 
 program.command('publish')
-  .description("Publish an entry using today's date")
-  .action((title) => {
-    title = title.join(' ');
+  .description("Update an entry to be published with today's date")
+  .argument('<title...>', 'blog post title')
+  .action((titleList: string[]) => {
+    const title = titleList.join(' ');
 
     const existingFile = findFile(title);
 
