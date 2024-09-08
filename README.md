@@ -9,5 +9,5 @@ It's more fun to make tools than to write blog entries. Or at least just as fun.
 
 ## Usage:
 
-I have `blog.ts` symlinked as `$HOME/bin/blog`.
+I have `tlt.ts` symlinked as `$HOME/bin/tlt`.
 

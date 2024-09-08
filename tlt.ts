@@ -2,11 +2,15 @@
 
 const { execSync, spawn } = require('child_process');
 
-function exec(cmd: string) {
-  return execSync(cmd, { maxBuffer: 1024 * 1024 * 10 }).toString().trim();
+function exec(cmd: string, stream: boolean = false) {
+  if (stream) {
+    return execSync(cmd, { stdio: 'inherit' });
+  } else {
+    return execSync(cmd, { maxBuffer: 1024 * 1024 * 10 }).toString().trim();
+  }
 }
 
-function run(command: string, args: string[]) {
+function run(command: string, args: string[], onSuccess: Function = () => {}) {
   const child = spawn(command, args, { stdio: 'inherit' });
 
   child.on('error', (error: { message: string }) => {
@@ -15,6 +19,9 @@ function run(command: string, args: string[]) {
 
   child.on('exit', (code: number) => {
     console.log(`Process exited with code ${code}`);
+    if(onSuccess) {
+      onSuccess();
+    }
   });
 }
 
@@ -22,14 +29,15 @@ const { Command } = require("commander");
 const program = new Command();
 
 program
-  .name("blog")
-  .description("Manage blog posts")
-  .version("1.0.0");
+  .name("tlt")
+  .description("Manage The Lack Thereof pages")
+  .version("1.1.0");
 
 function findFile(title: string) {
+  const escapedTitle = title.replace(/\//g, '\\/');
   const existingFile = exec(`
     cd ~/tlt/thelackthereof/content
-    ls *.md | rg '${title}' || true
+    ls *.md | rg -- '${escapedTitle}' || true
   `);
   if (existingFile.match(/\n/)) {
     console.log(`Found too many matches:\n${existingFile}`);
@@ -40,63 +48,125 @@ function findFile(title: string) {
 
 program.command('new')
   .alias('edit')
-  .description('Create or edit a blog post')
-  .argument('<title...>', 'blog post title')
-  .action((titleList: string[]) => {
-    const title = titleList.join(' ');
+  .description('Create or edit a page or blog post')
+  .option('-b, --blog', 'Blog post')
+  .option('-d, --date <date>', 'Date of the page creation (if not now)')
+  .option('-t, --tags <tags>', 'Tags for the page')
+  .argument('<title...>', 'page title')
+  .action((titleList: string[], options: any) => {
+    const baseTitle = titleList.join(' ');
+    const fileTitle = baseTitle.replace(/\//g, '-');
+    const title = baseTitle.replace(/\//g, '\\/');
 
     // Run the external command and store the output in a variable
     const existingFile = findFile(title);
 
     if (existingFile) {
-      run('vim', [`/home/awwaiid/tlt/thelackthereof/content/${existingFile}`]);
+      const templateDate = options.date || exec("date '+%Y-%m-%d'");
+      run('vim', [`/home/awwaiid/tlt/thelackthereof/content/${existingFile}`], () => {
+        exec(`
+          cd ~/tlt/thelackthereof/content
+          perl -pi -e 's/^updatedAt: .*/updatedAt: ${templateDate}/' "${existingFile}"
+        `);
+      });
     } else {
-      const fileDate = exec("date '+%Y.%m.%d'");
-      const templateDate = exec("date '+%Y-%m-%d'");
-      let newFilename = `TLT - ${fileDate} - ${title}.md`;
+      const templateDate = options.date || exec("date '+%Y-%m-%d'");
+      const fileDate = templateDate.replace(/-/g, '.');
+      let newFilename;
+      if (options.blog) {
+        newFilename = `TLT - ${fileDate} - ${fileTitle}.md`;
+      } else {
+        newFilename = `${fileTitle}.md`;
+      }
 
-      console.log(`Create/Edit blog '${newFilename}'`);
+      let baseTemplateTags = options.tags;
+      if (!baseTemplateTags && options.blog) {
+        baseTemplateTags = 'blog';
+      }
+
+      // This is some crazy shell script escaping, FYI
+      const templateTags = baseTemplateTags.split(',').map((tag: string) => `"'"'"${tag}"'"'"`).join(',');
+
+      console.log(`Create/Edit page '${newFilename}'`);
 
       exec(`
         cd ~/tlt/thelackthereof/content
-        cp -n "Blog Template TLT - 2023.01.01 - Blog Template.md" "${newFilename}"
+        cp -n "Page Template.md" "${newFilename}"
         perl -pi -e "s/TEMPLATE_TITLE/${title}/" "${newFilename}"
         perl -pi -e "s/TEMPLATE_DATE/${templateDate}/" "${newFilename}"
+        perl -pi -e "s/TEMPLATE_TAGS/${templateTags}/" "${newFilename}"
       `);
       run('vim', [`/home/awwaiid/tlt/thelackthereof/content/${newFilename}`]);
     }
   });
 
 program.command('drafts')
-  .description('List draft posts')
+  .description('List draft pages')
   .action(() => {
-    console.log(exec(`
+    exec(`
       cd ~/tlt/thelackthereof/content
-      rg -l 'draft: true' TLT*.md | sort
-    `));
+      rg -l '^draft: true' *.md | sort
+    `, true);
   });
 
 program.command('list')
-  .description('List posts')
+  .alias('ls')
+  .description('List pages')
+  .option('-b, --blog', 'Blog posts')
   .action(() => {
-    console.log(exec(`
-      cd ~/tlt/thelackthereof/content
-      ls TLT*.md
-    `));
+    if (program.opts().blog) {
+      exec(`
+        cd ~/tlt/thelackthereof/content
+        ls TLT*.md
+      `, true);
+    } else {
+      exec(`
+        cd ~/tlt/thelackthereof/content
+        ls *.md
+      `, true);
+    }
   });
 
-program.command('publish')
-  .description("Update an entry to be published with today's date")
+program.command('update-date')
+  .description('Modify the date for a blog post')
   .argument('<title...>', 'blog post title')
+  .action((titleList: string[]) => {
+    const title = titleList.join(' ');
+    const existingFile = findFile(title);
+    let matches;
+    if(matches = existingFile.match(/^TLT - (\d\d\d\d\.\d\d\.\d\d) - (.*).md$/)) {
+      const originalTitle = matches[2];
+
+      const fileDate = exec("date '+%Y.%m.%d'");
+      const templateDate = exec("date '+%Y-%m-%d'");
+      let newFilename = `TLT - ${fileDate} - ${originalTitle}.md`;
+
+      exec(`
+        cd ~/tlt/thelackthereof/content
+        perl -pi -e 's/^createdAt: .*/createdAt: ${templateDate}/' "${existingFile}"
+        perl -pi -e 's/^updatedAt: .*/updatedAt: ${templateDate}/' "${existingFile}"
+        mv "${existingFile}" "${newFilename}"
+      `);
+    } else {
+      console.log("Can't match date pattern for filename");
+    }
+  });
+
+
+program.command('publish')
+  .description("Update a page to be published with today's date")
+  .argument('<title...>', 'page title')
   .action((titleList: string[]) => {
     const title = titleList.join(' ');
 
     const existingFile = findFile(title);
 
     if (existingFile) {
+      const templateDate = exec("date '+%Y-%m-%d'");
       exec(`
         cd ~/tlt/thelackthereof/content
         perl -pi -e 's/draft: true//' "${existingFile}"
+        perl -pi -e 's/^updatedAt: .*/updatedAt: ${templateDate}/' "${existingFile}"
       `);
     } else {
       console.log("File not found");
@@ -104,14 +174,14 @@ program.command('publish')
   });
 
 program.command('push')
-  .description("Push blog updates to server")
+  .alias('deploy')
+  .description("Push page updates to server")
   .action(() => {
     console.log("Building and syncing...");
-    console.log(exec(`
+    exec(`
       cd ~/tlt/thelackthereof
-      npm run deploy || true
-    `));
+      npm run deploy-dynamic || true
+    `, true);
   });
 
 program.parse(process.argv);
-// const options = program.opts();
